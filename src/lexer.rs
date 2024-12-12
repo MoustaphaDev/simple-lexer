@@ -5,7 +5,7 @@
 mod character_helpers;
 
 #[derive(Debug, PartialEq)]
-enum Token {
+pub enum Token {
     Number(String),
     String(StringType),
     Identifier(String),
@@ -17,7 +17,7 @@ enum Token {
 }
 
 #[derive(Debug, PartialEq)]
-enum StringType {
+pub enum StringType {
     SingleQuote(String),
     DoubleQuote(String),
 }
@@ -35,7 +35,7 @@ enum State {
     InOperator,
 }
 
-struct Lexer {
+pub struct Lexer {
     current_state: State,
     buffered_token: String,
     input: String,
@@ -44,7 +44,7 @@ struct Lexer {
 }
 
 impl Lexer {
-    fn new(source: String) -> Self {
+    pub fn new(source: String) -> Self {
         Self {
             current_state: State::Start,
             buffered_token: String::new(),
@@ -155,7 +155,7 @@ impl Lexer {
 
 // lexer utilities
 impl Lexer {
-    fn lex(&mut self) -> &Vec<self::Token> {
+    pub fn lex(&mut self) -> &Vec<self::Token> {
         // TODO: could have a better data structure?
         let chars: Vec<char> = self.input.chars().collect();
         while self.cursor < chars.len() {

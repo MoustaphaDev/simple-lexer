@@ -23,10 +23,6 @@ pub fn is_single_quote(char: &char) -> bool {
     *char == '\''
 }
 
-pub fn is_quote(char: &char) -> bool {
-    is_double_quote(char) || is_single_quote(char)
-}
-
 pub fn is_double_quote(char: &char) -> bool {
     *char == '\"'
 }
@@ -39,9 +35,13 @@ pub fn is_whitespace(char: &char) -> bool {
     char.is_whitespace()
 }
 
-pub fn is_newline(char: &char) -> bool {
-    *char == '\n'
-}
+// pub fn is_quote(char: &char) -> bool {
+//     is_double_quote(char) || is_single_quote(char)
+// }
+//
+// pub fn is_newline(char: &char) -> bool {
+//     *char == '\n'
+// }
 
 pub fn is_in_identifier(char: &char) -> bool {
     char.is_ascii_alphanumeric() || *char == '_'
