@@ -227,7 +227,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_lexes_source_code_correctly() {
+    fn it_tokenizes_basic_number_assignment_correctly() {
+        let source = String::from("let value = 1;");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 8);
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("value".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator("=".to_string()),
+                Token::Whitespace(' '),
+                Token::Number("1".to_string()),
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn it_tokenizes_number_assignment_increment_correctly() {
+        let source = String::from("let value += 1;");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 8);
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("value".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator("+=".to_string()),
+                Token::Whitespace(' '),
+                Token::Number("1".to_string()),
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn it_tokenizes_number_post_increment_correctly() {
+        let source = String::from("let value = 1;\nvalue++;");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 12);
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("value".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator("=".to_string()),
+                Token::Whitespace(' '),
+                Token::Number("1".to_string()),
+                Token::Semicolon,
+                Token::Whitespace('\n'),
+                Token::Identifier("value".to_string()),
+                Token::Operator("++".to_string()),
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn it_tokenizes_source_with_string_concat_correctly() {
         let source = String::from("let word = \"Hello\" + \" \" + \"world!\"; ");
         let mut lexer = Lexer::new(source);
 
