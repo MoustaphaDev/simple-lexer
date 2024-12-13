@@ -96,7 +96,9 @@ impl Lexer {
 
     fn handle_in_operator(&mut self, char: &char) {
         // operators can be at most 2 characters long
-        if character_helpers::is_operator(char) && self.buffered_token.len() < 3 {
+        // len < 2 because if this branch is reached
+        // the token's buffer is gonna grow by 1
+        if character_helpers::is_operator(char) && self.buffered_token.len() < 2 {
             self.buffer_token(*char)
         } else {
             self.consume_buffered_token();
@@ -161,6 +163,21 @@ impl Lexer {
         &self.tokens
     }
 
+    fn create_span(&self) -> Span {
+        // if the buffered token is empty
+        // we're only processing a single character
+        let offset = if self.buffered_token.is_empty() {
+            1
+        } else {
+            self.buffered_token.len()
+        };
+
+        Span {
+            start: self.cursor - offset,
+            end: self.cursor,
+        }
+    }
+
     fn skip_current_char(&mut self) {
         self.cursor += 1;
     }
@@ -185,9 +202,26 @@ impl Lexer {
                 }
             },
             State::InNumber => Token::Number(self.buffered_token.clone()),
-            State::InOperator => token::match_operator_to_token(self.buffered_token.clone()),
-            // this should never be reached
-            State::Start => Token::Invalid(self.buffered_token.clone()),
+            State::InOperator => {
+                let token = token::match_operator_to_token(self.buffered_token.clone());
+                // if it's doesn't match any valid operator, it's a compound-like operator
+                // We should split the operator in two, consume the first
+                // part and the reprocess the second part
+                if let Token::Invalid(operator) = token {
+                    println!("Invalid operator: {}", operator);
+                    let mut operators_split = operator.chars();
+                    self.consume_token_explicit(match_operator_to_token(operators_split.next().unwrap().to_string()));
+
+                    match_operator_to_token(operators_split.next().unwrap().to_string())
+
+                } else {
+                    token
+                }
+            },
+            // TODO: this should never be reached
+            // not sure if panicking is right thought
+            // I'l leave it as is for now
+            State::Start => unreachable!("This function should never be called to buffered tokens in the Start state. Use `consume_token_explicit`"),
         };
 
         self.tokens.push(token);
