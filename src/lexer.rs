@@ -20,12 +20,37 @@ enum State {
     InOperator,
 }
 
+pub struct Span {
+    start: usize,
+    end: usize,
+}
+
+pub struct LexerError {
+    span: Span,
+    message: String,
+}
+
+pub struct ErrorHandler {
+    errors: Vec<LexerError>,
+}
+
+impl ErrorHandler {
+    fn new() -> Self {
+        Self { errors: Vec::new() }
+    }
+
+    fn add_error(&mut self, error: LexerError) {
+        self.errors.push(error);
+    }
+}
+
 pub struct Lexer {
     current_state: State,
     buffered_token: String,
     input: String,
     cursor: usize,
     tokens: Vec<Token>,
+    handler: ErrorHandler,
 }
 
 impl Lexer {
@@ -36,6 +61,7 @@ impl Lexer {
             input: source,
             cursor: 0,
             tokens: Vec::new(),
+            handler: ErrorHandler::new(),
         }
     }
 }
@@ -81,7 +107,15 @@ impl Lexer {
             self.consume_token_explicit(Token::Whitespace(*char));
             self.skip_current_char();
         } else {
-            self.consume_token_explicit(Token::Invalid(char.to_string()))
+            // TODO: should I introduce an InError state
+            // so its the state handler will take responsibility
+            // on how to handle the errors?
+            // meh idk 😅, I'll just handle it here for now
+            self.consume_token_explicit(Token::Invalid(char.to_string()));
+            self.handler.add_error(LexerError {
+                span: self.create_span(),
+                message: format!("Invalid token: `{char}`"),
+            });
         }
     }
 
