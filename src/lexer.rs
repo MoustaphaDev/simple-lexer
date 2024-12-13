@@ -199,6 +199,13 @@ impl Lexer {
             }
         }
 
+        // consume the last buffered token
+        // if the state machine is still in a non-start state
+        match self.current_state {
+            State::Start => {}
+            _ => self.consume_buffered_token(),
+        }
+
         &self.tokens
     }
 
@@ -245,9 +252,10 @@ impl Lexer {
                 let token = token::match_operator_to_token(self.buffered_token.clone());
                 // if it's doesn't match any valid operator, it's a compound-like operator
                 // We should split the operator in two, consume the first
-                // part and the reprocess the second part
+                // part and then reprocess the second part
                 if let Token::Invalid(operator) = token {
-                    println!("Invalid operator: {}", operator);
+                    // println!("Invalid operator: {}", operator);
+                    // TODO: collect errors here
                     let mut operators_split = operator.chars();
                     self.consume_token_explicit(match_operator_to_token(operators_split.next().unwrap().to_string()));
 
@@ -515,6 +523,38 @@ mod tests {
                 Token::Whitespace(' '),
                 Token::Identifier("something".to_string()),
                 Token::Semicolon,
+            ]
+        )
+    }
+
+    #[test]
+    fn it_correctly_tokenizes_source_when_lexer_state_machine_ends_in_a_non_start_state() {
+        // Here the lexer's state machine will end in a non-start state
+        // more precisely in the InIdentifier state
+        // That's because the identifier is at the end of the source
+        // and its corresponding handler will only consume the buffered
+        // token when it encounters a non-identifier character,
+        // which doesn't happen in this case
+        // It requires special handling (to consume the buffered token when
+        // lexing ends in a non-start state), but this makes the
+        // handlers' code much simpler
+        let source = String::from("let value = another_value");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 7);
+
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("value".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator(OperatorType::Equal),
+                Token::Whitespace(' '),
+                Token::Identifier("another_value".to_string()),
             ]
         )
     }
