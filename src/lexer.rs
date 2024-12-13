@@ -295,6 +295,54 @@ mod tests {
     }
 
     #[test]
+    fn it_tokenizes_invalid_operator_correctly_1() {
+        let source = String::from("let value =+ 1;");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 9);
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("value".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator(OperatorType::Equal),
+                Token::Operator(OperatorType::Add),
+                Token::Whitespace(' '),
+                Token::Number("1".to_string()),
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn it_tokenizes_invalid_operator_correctly_2() {
+        let source = String::from("let value %=+ 1;");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 9);
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("value".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator(OperatorType::CompoundModulo),
+                Token::Operator(OperatorType::Add),
+                Token::Whitespace(' '),
+                Token::Number("1".to_string()),
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
     fn it_tokenizes_number_post_increment_correctly() {
         let source = String::from("let value = 1;\nvalue++;");
         let mut lexer = Lexer::new(source);
@@ -316,6 +364,29 @@ mod tests {
                 Token::Whitespace('\n'),
                 Token::Identifier("value".to_string()),
                 Token::Operator(OperatorType::Increment),
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn it_tokenizes_cyrillic_strings_correctly() {
+        let source = String::from("let greetings = 'привет мой друг';");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 8);
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("greetings".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator(OperatorType::Equal),
+                Token::Whitespace(' '),
+                Token::String(StringType::SingleQuoted("привет мой друг".to_string())),
                 Token::Semicolon,
             ]
         );
