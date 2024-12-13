@@ -3,28 +3,13 @@
 // value = 1 + 3 + 4;
 // name = name + ' ' + "hey you!";
 mod character_helpers;
+mod token;
 
-#[derive(Debug, PartialEq)]
-pub enum Token {
-    Number(String),
-    String(StringType),
-    Identifier(String),
-    Operator(String),
-    Keyword(String),
-    Whitespace(char),
-    Semicolon,
-    Invalid,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum StringType {
-    SingleQuote(String),
-    DoubleQuote(String),
-}
+use token::*;
 
 enum StringState {
-    SingleQuote,
-    DoubleQuote,
+    InSingleQuote,
+    InDoubleQuote,
 }
 
 enum State {
@@ -79,11 +64,11 @@ impl Lexer {
         } else if character_helpers::is_single_quote(char) {
             // don't buffer the opening quote
             self.cursor += 1;
-            self.change_state(State::InString(StringState::SingleQuote));
+            self.change_state(State::InString(StringState::InSingleQuote));
         } else if character_helpers::is_double_quote(char) {
             // don't buffer the opening quote
             self.cursor += 1;
-            self.change_state(State::InString(StringState::DoubleQuote));
+            self.change_state(State::InString(StringState::InDoubleQuote));
         } else if character_helpers::is_operator(char) {
             self.change_state(State::InOperator);
         } else if character_helpers::is_semicolon(char) {
@@ -95,6 +80,8 @@ impl Lexer {
         } else if character_helpers::is_whitespace(char) {
             self.consume_token_explicit(Token::Whitespace(*char));
             self.skip_current_char();
+        } else {
+            self.consume_token_explicit(Token::Invalid(char.to_string()))
         }
     }
 
@@ -108,7 +95,8 @@ impl Lexer {
     }
 
     fn handle_in_operator(&mut self, char: &char) {
-        if character_helpers::is_operator(char) {
+        // operators can be at most 2 characters long
+        if character_helpers::is_operator(char) && self.buffered_token.len() < 3 {
             self.buffer_token(*char)
         } else {
             self.consume_buffered_token();
@@ -120,8 +108,8 @@ impl Lexer {
         let is_closing_quote;
         if let State::InString(string_state) = &self.current_state {
             is_closing_quote = match string_state {
-                StringState::SingleQuote => character_helpers::is_single_quote,
-                StringState::DoubleQuote => character_helpers::is_double_quote,
+                StringState::InSingleQuote => character_helpers::is_single_quote,
+                StringState::InDoubleQuote => character_helpers::is_double_quote,
             };
         } else {
             return;
@@ -189,17 +177,17 @@ impl Lexer {
                 }
             }
             State::InString(string_state) => match string_state {
-                StringState::SingleQuote => {
-                    Token::String(StringType::SingleQuote(self.buffered_token.clone()))
+                StringState::InSingleQuote => {
+                    Token::String(StringType::SingleQuoted(self.buffered_token.clone()))
                 }
-                StringState::DoubleQuote => {
-                    Token::String(StringType::DoubleQuote(self.buffered_token.clone()))
+                StringState::InDoubleQuote => {
+                    Token::String(StringType::DoubleQuoted(self.buffered_token.clone()))
                 }
             },
             State::InNumber => Token::Number(self.buffered_token.clone()),
-            State::InOperator => Token::Operator(self.buffered_token.clone()),
+            State::InOperator => token::match_operator_to_token(self.buffered_token.clone()),
             // this should never be reached
-            State::Start => Token::Invalid,
+            State::Start => Token::Invalid(self.buffered_token.clone()),
         };
 
         self.tokens.push(token);
@@ -241,7 +229,7 @@ mod tests {
                 Token::Whitespace(' '),
                 Token::Identifier("value".to_string()),
                 Token::Whitespace(' '),
-                Token::Operator("=".to_string()),
+                Token::Operator(OperatorType::Equal),
                 Token::Whitespace(' '),
                 Token::Number("1".to_string()),
                 Token::Semicolon,
@@ -264,7 +252,7 @@ mod tests {
                 Token::Whitespace(' '),
                 Token::Identifier("value".to_string()),
                 Token::Whitespace(' '),
-                Token::Operator("+=".to_string()),
+                Token::Operator(OperatorType::CompoundAdd),
                 Token::Whitespace(' '),
                 Token::Number("1".to_string()),
                 Token::Semicolon,
@@ -287,13 +275,13 @@ mod tests {
                 Token::Whitespace(' '),
                 Token::Identifier("value".to_string()),
                 Token::Whitespace(' '),
-                Token::Operator("=".to_string()),
+                Token::Operator(OperatorType::Equal),
                 Token::Whitespace(' '),
                 Token::Number("1".to_string()),
                 Token::Semicolon,
                 Token::Whitespace('\n'),
                 Token::Identifier("value".to_string()),
-                Token::Operator("++".to_string()),
+                Token::Operator(OperatorType::Increment),
                 Token::Semicolon,
             ]
         );
@@ -314,17 +302,17 @@ mod tests {
                 Token::Whitespace(' '),
                 Token::Identifier("word".to_string()),
                 Token::Whitespace(' '),
-                Token::Operator("=".to_string()),
+                Token::Operator(OperatorType::Equal),
                 Token::Whitespace(' '),
-                Token::String(StringType::DoubleQuote("Hello".to_string())),
+                Token::String(StringType::DoubleQuoted("Hello".to_string())),
                 Token::Whitespace(' '),
-                Token::Operator("+".to_string()),
+                Token::Operator(OperatorType::Add),
                 Token::Whitespace(' '),
-                Token::String(StringType::DoubleQuote(" ".to_string())),
+                Token::String(StringType::DoubleQuoted(" ".to_string())),
                 Token::Whitespace(' '),
-                Token::Operator("+".to_string()),
+                Token::Operator(OperatorType::Add),
                 Token::Whitespace(' '),
-                Token::String(StringType::DoubleQuote("world!".to_string())),
+                Token::String(StringType::DoubleQuoted("world!".to_string())),
                 Token::Semicolon,
                 Token::Whitespace(' ')
             ]

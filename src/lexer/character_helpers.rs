@@ -15,6 +15,15 @@ pub fn is_letter(char: &char) -> bool {
     char.is_ascii_alphabetic()
 }
 
+// pub fn is_operator_posfixable_by_equal(char: &char) -> bool {
+//     matches!(char, '+' | '-' | '*' | '/' | '=' | '!')
+// }
+
+// pub fn is_equal_operator(char: &char) -> bool {
+//     *char == '='
+// }
+
+// no bitwise or comparison stuff for now
 pub fn is_operator(char: &char) -> bool {
     matches!(char, '+' | '-' | '*' | '/' | '=' | '!' | '<' | '>')
 }
