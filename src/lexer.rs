@@ -106,10 +106,10 @@ impl Lexer {
             // the token was created and consumed on the spot
             // skip to the next character in the next iteration
             // of the state machine
-            self.skip_current_char();
+            self.advance_cursor();
         } else if character_helpers::is_whitespace(char) {
             self.consume_token_explicit(Token::Whitespace(*char));
-            self.skip_current_char();
+            self.advance_cursor();
         } else {
             // TODO: should I introduce an InError state
             // so its the state handler will take responsibility
@@ -120,6 +120,7 @@ impl Lexer {
                 span: self.create_span(),
                 message: format!("Invalid token: `{char}`"),
             });
+            self.advance_cursor()
         }
     }
 
@@ -164,7 +165,7 @@ impl Lexer {
             // stored in the token
             // We already have information about the nature
             // of the string in the token itself
-            self.skip_current_char();
+            self.advance_cursor();
             self.consume_buffered_token();
             self.reset_state();
         }
@@ -216,7 +217,7 @@ impl Lexer {
         }
     }
 
-    fn skip_current_char(&mut self) {
+    fn advance_cursor(&mut self) {
         self.cursor += 1;
     }
 
@@ -484,5 +485,37 @@ mod tests {
                 Token::Whitespace(' ')
             ]
         );
+    }
+
+    #[test]
+    fn it_correctly_tokenizes_source_with_invalid_tokens() {
+        let source = String::from("let @$` = &&| something something;");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 16);
+
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Invalid('@'.to_string()),
+                Token::Invalid('$'.to_string()),
+                Token::Invalid('`'.to_string()),
+                Token::Whitespace(' '),
+                Token::Operator(OperatorType::Equal),
+                Token::Whitespace(' '),
+                Token::Invalid('&'.to_string()),
+                Token::Invalid('&'.to_string()),
+                Token::Invalid('|'.to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("something".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("something".to_string()),
+                Token::Semicolon,
+            ]
+        )
     }
 }
