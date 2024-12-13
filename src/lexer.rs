@@ -2,6 +2,10 @@
 // should be able to lex something like
 // value = 1 + 3 + 4;
 // name = name + ' ' + "hey you!";
+
+// The lexer is very clone and casting heavy
+// I'll solve performance issues when they arise
+
 mod character_helpers;
 mod token;
 
@@ -306,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn it_tokenizes_number_assignment_increment_correctly() {
+    fn it_tokenizes_number_compound_assignment_correctly() {
         let source = String::from("let value += 1;");
         let mut lexer = Lexer::new(source);
 
@@ -369,6 +373,30 @@ mod tests {
                 Token::Whitespace(' '),
                 Token::Operator(OperatorType::CompoundModulo),
                 Token::Operator(OperatorType::Add),
+                Token::Whitespace(' '),
+                Token::Number("1".to_string()),
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn it_tokenizes_invalid_operator_correctly_3() {
+        let source = String::from("let value ++++ 1;");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+
+        assert_eq!(tokens.len(), 9);
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("value".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator(OperatorType::Increment),
+                Token::Operator(OperatorType::Increment),
                 Token::Whitespace(' '),
                 Token::Number("1".to_string()),
                 Token::Semicolon,
