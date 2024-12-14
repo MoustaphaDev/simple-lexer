@@ -1,10 +1,13 @@
 #[derive(Debug, PartialEq)]
 pub enum Token {
-    Number(String),
+    // NOTE: consider refactoring to add concrete tokens
+    // instead of nesting information about the token in
+    // its enum value
     String(StringType),
-    Identifier(String),
     Operator(OperatorType),
     Keyword(String),
+    Number(String),
+    Identifier(String),
     Whitespace(char),
     Semicolon,
     Invalid(String),

@@ -24,11 +24,13 @@ enum State {
     InOperator,
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Span {
     start: usize,
-    end: usize,
+    length: usize,
 }
 
+#[derive(Debug, PartialEq)]
 pub struct LexerError {
     span: Span,
     message: String,
@@ -93,11 +95,11 @@ impl Lexer {
             self.change_state(State::InIdentifier);
         } else if character_helpers::is_single_quote(char) {
             // don't buffer the opening quote
-            self.cursor += 1;
+            self.advance_cursor();
             self.change_state(State::InString(StringState::InSingleQuote));
         } else if character_helpers::is_double_quote(char) {
             // don't buffer the opening quote
-            self.cursor += 1;
+            self.advance_cursor();
             self.change_state(State::InString(StringState::InDoubleQuote));
         } else if character_helpers::is_operator(char) {
             self.change_state(State::InOperator);
@@ -116,11 +118,12 @@ impl Lexer {
             // on how to handle the errors?
             // meh idk 😅, I'll just handle it here for now
             self.consume_token_explicit(Token::Invalid(char.to_string()));
+            self.advance_cursor();
+
             self.handler.add_error(LexerError {
                 span: self.create_span(),
                 message: format!("Invalid token: `{char}`"),
             });
-            self.advance_cursor()
         }
     }
 
@@ -209,18 +212,25 @@ impl Lexer {
         &self.tokens
     }
 
+    /**
+     * Creates a Span from the current cursor position
+     * Assumes the cursor is one character ahead
+     * of the last character of the token
+     */
     fn create_span(&self) -> Span {
         // if the buffered token is empty
         // we're only processing a single character
-        let offset = if self.buffered_token.is_empty() {
+        let token_length = if self.buffered_token.is_empty() {
             1
         } else {
             self.buffered_token.len()
         };
 
+        let end = self.cursor - 1;
+
         Span {
-            start: self.cursor - offset,
-            end: self.cursor,
+            start: end - token_length + 1,
+            length: token_length,
         }
     }
 
@@ -254,11 +264,13 @@ impl Lexer {
                 // We should split the operator in two, consume the first
                 // part and then reprocess the second part
                 if let Token::Invalid(operator) = token {
-                    // println!("Invalid operator: {}", operator);
-                    // TODO: collect errors here
+                    self.handler.add_error(LexerError {
+                        span: self.create_span(),
+                        message: format!("Invalid operator: `{}`", operator),
+                    });
+
                     let mut operators_split = operator.chars();
                     self.consume_token_explicit(match_operator_to_token(operators_split.next().unwrap().to_string()));
-
                     match_operator_to_token(operators_split.next().unwrap().to_string())
 
                 } else {
@@ -287,7 +299,7 @@ impl Lexer {
 
     fn buffer_token(&mut self, char: char) {
         self.buffered_token.push(char);
-        self.cursor += 1;
+        self.advance_cursor();
     }
 }
 
