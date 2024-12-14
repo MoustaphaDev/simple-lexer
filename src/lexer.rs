@@ -540,6 +540,125 @@ mod tests {
     }
 
     #[test]
+    fn it_collects_expected_errors() {
+        let source = String::from("let value =+ 1;\nlet @$` = &&| something something;");
+        let mut lexer = Lexer::new(source);
+
+        let tokens = lexer.lex();
+        assert_eq!(tokens.len(), 26);
+
+        assert_eq!(
+            tokens,
+            &vec![
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("value".to_string()),
+                Token::Whitespace(' '),
+                Token::Operator(OperatorType::Equal),
+                Token::Operator(OperatorType::Add),
+                Token::Whitespace(' '),
+                Token::Number("1".to_string()),
+                Token::Semicolon,
+                Token::Whitespace('\n'),
+                Token::Keyword("let".to_string()),
+                Token::Whitespace(' '),
+                Token::Invalid('@'.to_string()),
+                Token::Invalid('$'.to_string()),
+                Token::Invalid('`'.to_string()),
+                Token::Whitespace(' '),
+                Token::Operator(OperatorType::Equal),
+                Token::Whitespace(' '),
+                Token::Invalid('&'.to_string()),
+                Token::Invalid('&'.to_string()),
+                Token::Invalid('|'.to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("something".to_string()),
+                Token::Whitespace(' '),
+                Token::Identifier("something".to_string()),
+                Token::Semicolon,
+            ]
+        );
+
+        assert_eq!(lexer.handler.errors.len(), 7);
+        assert_eq!(
+            LexerError {
+                message: "Invalid operator: `=+`".to_string(),
+                span: Span {
+                    start: 10,
+                    length: 2,
+                }
+            },
+            lexer.handler.errors[0]
+        );
+
+        assert_eq!(
+            LexerError {
+                message: "Invalid token: `@`".to_string(),
+                span: Span {
+                    start: 20,
+                    length: 1,
+                }
+            },
+            lexer.handler.errors[1]
+        );
+
+        assert_eq!(
+            LexerError {
+                message: "Invalid token: `$`".to_string(),
+                span: Span {
+                    start: 21,
+                    length: 1,
+                }
+            },
+            lexer.handler.errors[2]
+        );
+
+        assert_eq!(
+            LexerError {
+                message: "Invalid token: ```".to_string(),
+                span: Span {
+                    start: 22,
+                    length: 1,
+                }
+            },
+            lexer.handler.errors[3]
+        );
+
+        assert_eq!(
+            LexerError {
+                message: "Invalid token: `&`".to_string(),
+                span: Span {
+                    start: 26,
+                    length: 1,
+                }
+            },
+            lexer.handler.errors[4]
+        );
+
+        assert_eq!(
+            LexerError {
+                message: "Invalid token: `&`".to_string(),
+                span: Span {
+                    start: 27,
+                    length: 1,
+                }
+            },
+            lexer.handler.errors[5]
+        );
+
+        assert_eq!(
+            LexerError {
+                message: "Invalid token: `|`".to_string(),
+                span: Span {
+                    start: 28,
+                    length: 1,
+                }
+            },
+            lexer.handler.errors[6]
+        );
+    }
+
+    #[test]
     fn it_correctly_tokenizes_source_when_lexer_state_machine_ends_in_a_non_start_state() {
         // Here the lexer's state machine will end in a non-start state
         // more precisely in the InIdentifier state
