@@ -1,10 +1,11 @@
 // simple lexer for a simple language
 // should be able to lex something like
-// value = 1 + 3 + 4;
-// name = name + ' ' + "hey you!";
+// let value = 1 + 3 + 4;
+// let name = name + ' ' + "hey you!";
 
 // The lexer is very clone and casting heavy
 // I'll solve performance issues when they arise
+// not a priority for now
 
 mod character_helpers;
 mod token;
@@ -41,7 +42,7 @@ pub struct ErrorHandler {
 }
 
 impl ErrorHandler {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { errors: Vec::new() }
     }
 
@@ -50,29 +51,29 @@ impl ErrorHandler {
     }
 }
 
-pub struct Lexer {
+pub struct Lexer<'a> {
     current_state: State,
     buffered_token: String,
     input: String,
     cursor: usize,
     tokens: Vec<Token>,
-    handler: ErrorHandler,
+    handler: &'a mut ErrorHandler,
 }
 
-impl Lexer {
-    pub fn new(source: String) -> Self {
+impl<'a> Lexer<'a> {
+    pub fn new(source: String, handler: &'a mut ErrorHandler) -> Self {
         Self {
             current_state: State::Start,
             buffered_token: String::new(),
             input: source,
             cursor: 0,
             tokens: Vec::new(),
-            handler: ErrorHandler::new(),
+            handler,
         }
     }
 }
 
-impl Lexer {
+impl<'a> Lexer<'a> {
     // something is an Identifier
     // until we're proven wrong and that the
     // identifier matches a keyword
@@ -87,7 +88,7 @@ impl Lexer {
 }
 
 // state handlers
-impl Lexer {
+impl<'a> Lexer<'a> {
     fn handle_start(&mut self, char: &char) {
         if character_helpers::is_digit(char) {
             self.change_state(State::InNumber);
@@ -186,7 +187,7 @@ impl Lexer {
 }
 
 // lexer utilities
-impl Lexer {
+impl<'a> Lexer<'a> {
     pub fn lex(&mut self) -> &Vec<self::Token> {
         // TODO: could have a better data structure?
         let chars: Vec<char> = self.input.chars().collect();
@@ -310,7 +311,8 @@ mod tests {
     #[test]
     fn it_tokenizes_basic_number_assignment_correctly() {
         let source = String::from("let value = 1;");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -333,7 +335,8 @@ mod tests {
     #[test]
     fn it_tokenizes_number_compound_assignment_correctly() {
         let source = String::from("let value += 1;");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -356,7 +359,8 @@ mod tests {
     #[test]
     fn it_tokenizes_invalid_operator_correctly_1() {
         let source = String::from("let value =+ 1;");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -380,7 +384,8 @@ mod tests {
     #[test]
     fn it_tokenizes_invalid_operator_correctly_2() {
         let source = String::from("let value %=+ 1;");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -404,7 +409,8 @@ mod tests {
     #[test]
     fn it_tokenizes_invalid_operator_correctly_3() {
         let source = String::from("let value ++++ 1;");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -428,7 +434,8 @@ mod tests {
     #[test]
     fn it_tokenizes_number_post_increment_correctly() {
         let source = String::from("let value = 1;\nvalue++;");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -455,7 +462,8 @@ mod tests {
     #[test]
     fn it_tokenizes_cyrillic_strings_correctly() {
         let source = String::from("let greetings = 'привет мой друг';");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -478,7 +486,8 @@ mod tests {
     #[test]
     fn it_tokenizes_source_with_string_concat_correctly() {
         let source = String::from("let word = \"Hello\" + \" \" + \"world!\"; ");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -510,7 +519,8 @@ mod tests {
     #[test]
     fn it_correctly_tokenizes_source_with_invalid_tokens() {
         let source = String::from("let @$` = &&| something something;");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -542,7 +552,8 @@ mod tests {
     #[test]
     fn it_collects_expected_errors() {
         let source = String::from("let value =+ 1;\nlet @$` = &&| something something;");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
         assert_eq!(tokens.len(), 26);
@@ -670,7 +681,8 @@ mod tests {
         // lexing ends in a non-start state), but this makes the
         // handlers' code much simpler
         let source = String::from("let value = another_value");
-        let mut lexer = Lexer::new(source);
+        let mut handler = ErrorHandler::new();
+        let mut lexer = Lexer::new(source, &mut handler);
 
         let tokens = lexer.lex();
 
