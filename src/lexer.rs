@@ -3,10 +3,6 @@
 // let value = 1 + 3 + 4;
 // let name = name + ' ' + "hey you!";
 
-// The lexer is very clone and casting heavy
-// I'll solve performance issues when they arise
-// not a priority for now
-
 mod character_helpers;
 mod token;
 
@@ -45,6 +41,7 @@ pub struct ErrorHandler {
 
 pub struct Lexer<'a> {
     current_state: State,
+    // byte index of the first character of the token being buffered
     buffered_token_start: usize,
     input: &'a String,
     /**
@@ -55,7 +52,7 @@ pub struct Lexer<'a> {
      * use the current_code_point_byte_index value
      */
     cursor: usize,
-    current_code_point_index: usize,
+    current_character_byte_index: usize,
     tokens: Vec<Token>,
     handler: &'a mut ErrorHandler,
 }
@@ -75,7 +72,7 @@ impl<'a> Lexer<'a> {
         Self {
             current_state: State::Start,
             buffered_token_start: 0,
-            current_code_point_index: 0,
+            current_character_byte_index: 0,
             input: source,
             cursor: 0,
             tokens: Vec::new(),
@@ -97,7 +94,7 @@ impl Lexer<'_> {
 // state handlers
 impl<'a> Lexer<'a> {
     fn handle_start(&mut self, character: &char) {
-        self.buffered_token_start = self.current_code_point_index;
+        self.buffered_token_start = self.current_character_byte_index;
 
         if character_helpers::is_digit(character) {
             self.change_state(State::InNumber);
@@ -114,20 +111,15 @@ impl<'a> Lexer<'a> {
         } else if character_helpers::is_operator(character) {
             self.change_state(State::InOperator);
         } else if character_helpers::is_semicolon(character) {
-            let token = Token {
-                kind: TokenKind::Semicolon,
-                span: Span::new(self.buffered_token_start, 1),
-            };
+            let token = token::create_token(TokenKind::Semicolon, self.buffered_token_start, 1);
             self.consume_token_explicit(token);
             // the token was created and consumed on the spot
-            // skip to the next graphem indice in the next iteration
+            // skip to the next character in the next iteration
             // of the state machine
             self.advance_cursor();
         } else if character_helpers::is_whitespace(character) {
-            let token = Token {
-                kind: TokenKind::Whitespace,
-                span: Span::new(self.buffered_token_start, 1),
-            };
+            let token = token::create_token(TokenKind::Whitespace, self.buffered_token_start, 1);
+
             self.consume_token_explicit(token);
             self.advance_cursor();
         } else {
@@ -135,15 +127,13 @@ impl<'a> Lexer<'a> {
             // so its the state handler will take responsibility
             // on how to handle the errors?
             // meh idk 😅, I'll just handle it here for now
-            let token = Token {
-                kind: TokenKind::Invalid,
-                span: Span::new(self.buffered_token_start, 1),
-            };
+            let token = token::create_token(TokenKind::Invalid, self.buffered_token_start, 1);
+
             self.consume_token_explicit(token);
             self.advance_cursor();
 
             self.handler.add_error(LexerError {
-                span: self.create_span(),
+                span: self.create_current_token_span(),
                 kind: LexerErrorKind::InvalidToken,
             });
         }
@@ -214,11 +204,11 @@ impl<'a> Lexer<'a> {
         let characters = self.input.char_indices().collect::<Vec<(usize, char)>>();
 
         while self.cursor < characters.len() {
-            let (current_code_point_byte_index, current_character) = characters
+            let (current_character_byte_index, current_character) = characters
                 .get(self.cursor)
                 .expect("Something something bad!");
 
-            self.current_code_point_index = *current_code_point_byte_index;
+            self.current_character_byte_index = *current_character_byte_index;
 
             match self.current_state {
                 State::Start => self.handle_start(current_character),
@@ -236,7 +226,7 @@ impl<'a> Lexer<'a> {
             _ => {
                 // advance the character index so that the last
                 // character is included in the buffered token
-                self.current_code_point_index = self.input.len();
+                self.current_character_byte_index = self.input.len();
                 self.consume_buffered_token()
             }
         }
@@ -245,17 +235,19 @@ impl<'a> Lexer<'a> {
     }
 
     /**
-     * Creates a Span from the current cursor position
-     * Assumes the cursor is one character ahead
-     * of the last character of the token
+     * Creates a span from buffered_token_start, which is the
+     * byte index of the first character of the token being buffered
      */
-    fn create_span(&self) -> Span {
+    fn create_current_token_span(&self) -> Span {
         // if the buffered token is empty
         // we're only processing a single character
-        let token_length = if self.get_buffered_token().is_empty() {
-            1
-        } else {
-            self.get_buffered_token().len()
+        let token_length = {
+            let l = self.get_buffered_token().len();
+            if l == 0 {
+                1
+            } else {
+                l
+            }
         };
 
         Span::new(self.buffered_token_start, token_length)
@@ -271,7 +263,7 @@ impl<'a> Lexer<'a> {
         // TODO: consider if you should introduce caching here
         // Could be a bigger of a concern when you just want to get the length of the buffered token
         // Will see, maybe I just don't understand enough how string slices work, and I'm overthinking it 🤷
-        &self.input[self.buffered_token_start..self.current_code_point_index]
+        &self.input[self.buffered_token_start..self.current_character_byte_index]
     }
 
     fn advance_cursor(&mut self) {
@@ -294,7 +286,7 @@ impl<'a> Lexer<'a> {
 
                 // advance the character byte index so that the closing
                 // quote is included in the buffered token
-                self.current_code_point_index += 1;
+                self.current_character_byte_index += 1;
 
                 match string_state {
                     StringState::InSingleQuote => {
@@ -315,17 +307,14 @@ impl<'a> Lexer<'a> {
                 match operator_kind {
                     OperatorKind::Invalid => {
                         self.handler.add_error(LexerError {
-                            span: self.create_span(),
+                            span: self.create_current_token_span(),
                             kind: LexerErrorKind::InvalidOperator,
                         });
                         let buffered_token= self.get_buffered_token();
                         let first_operator_slice = &buffered_token[0..1];
                         let first_operator_kind = token::match_operator_slice_to_operator_kind(first_operator_slice);
 
-                        let first_token = Token {
-                            kind: TokenKind::Operator(first_operator_kind),
-                            span: Span::new(self.buffered_token_start, 1)
-                        };
+                        let first_token = token::create_token( TokenKind::Operator(first_operator_kind), self.buffered_token_start, 1);
                         self.consume_token_explicit(first_token);
 
                         self.buffered_token_start += 1;
@@ -345,7 +334,7 @@ impl<'a> Lexer<'a> {
 
         let token = Token {
             kind: token_kind,
-            span: self.create_span(),
+            span: self.create_current_token_span(),
         };
 
         // the cursor is one character ahead of the last character
@@ -371,13 +360,6 @@ mod tests {
     use super::*;
     use similar_asserts::assert_eq;
 
-    fn create_token(kind: TokenKind, start: usize, length: usize) -> Token {
-        Token {
-            kind,
-            span: Span { start, length },
-        }
-    }
-
     #[test]
     fn it_tokenizes_basic_number_assignment_correctly() {
         let source = String::from("let value = 1;");
@@ -390,14 +372,14 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 5),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
-                create_token(TokenKind::Whitespace, 11, 1),
-                create_token(TokenKind::Number, 12, 1),
-                create_token(TokenKind::Semicolon, 13, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 5),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                token::create_token(TokenKind::Whitespace, 11, 1),
+                token::create_token(TokenKind::Number, 12, 1),
+                token::create_token(TokenKind::Semicolon, 13, 1),
             ]
         );
     }
@@ -414,14 +396,14 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 5),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Operator(OperatorKind::CompoundAdd), 10, 2),
-                create_token(TokenKind::Whitespace, 12, 1),
-                create_token(TokenKind::Number, 13, 1),
-                create_token(TokenKind::Semicolon, 14, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 5),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::CompoundAdd), 10, 2),
+                token::create_token(TokenKind::Whitespace, 12, 1),
+                token::create_token(TokenKind::Number, 13, 1),
+                token::create_token(TokenKind::Semicolon, 14, 1),
             ]
         );
     }
@@ -438,15 +420,15 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 5),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
-                create_token(TokenKind::Operator(OperatorKind::Add), 11, 1),
-                create_token(TokenKind::Whitespace, 12, 1),
-                create_token(TokenKind::Number, 13, 1),
-                create_token(TokenKind::Semicolon, 14, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 5),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Add), 11, 1),
+                token::create_token(TokenKind::Whitespace, 12, 1),
+                token::create_token(TokenKind::Number, 13, 1),
+                token::create_token(TokenKind::Semicolon, 14, 1),
             ]
         );
     }
@@ -463,15 +445,15 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 5),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Operator(OperatorKind::CompoundModulo), 10, 2),
-                create_token(TokenKind::Operator(OperatorKind::Add), 12, 1),
-                create_token(TokenKind::Whitespace, 13, 1),
-                create_token(TokenKind::Number, 14, 1),
-                create_token(TokenKind::Semicolon, 15, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 5),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::CompoundModulo), 10, 2),
+                token::create_token(TokenKind::Operator(OperatorKind::Add), 12, 1),
+                token::create_token(TokenKind::Whitespace, 13, 1),
+                token::create_token(TokenKind::Number, 14, 1),
+                token::create_token(TokenKind::Semicolon, 15, 1),
             ]
         );
     }
@@ -488,15 +470,15 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 5),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Operator(OperatorKind::Increment), 10, 2),
-                create_token(TokenKind::Operator(OperatorKind::Increment), 12, 2),
-                create_token(TokenKind::Whitespace, 14, 1),
-                create_token(TokenKind::Number, 15, 1),
-                create_token(TokenKind::Semicolon, 16, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 5),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Increment), 10, 2),
+                token::create_token(TokenKind::Operator(OperatorKind::Increment), 12, 2),
+                token::create_token(TokenKind::Whitespace, 14, 1),
+                token::create_token(TokenKind::Number, 15, 1),
+                token::create_token(TokenKind::Semicolon, 16, 1),
             ]
         );
     }
@@ -513,18 +495,18 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 5),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
-                create_token(TokenKind::Whitespace, 11, 1),
-                create_token(TokenKind::Number, 12, 1),
-                create_token(TokenKind::Semicolon, 13, 1),
-                create_token(TokenKind::Whitespace, 14, 1),
-                create_token(TokenKind::Identifier, 15, 5),
-                create_token(TokenKind::Operator(OperatorKind::Increment), 20, 2),
-                create_token(TokenKind::Semicolon, 22, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 5),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                token::create_token(TokenKind::Whitespace, 11, 1),
+                token::create_token(TokenKind::Number, 12, 1),
+                token::create_token(TokenKind::Semicolon, 13, 1),
+                token::create_token(TokenKind::Whitespace, 14, 1),
+                token::create_token(TokenKind::Identifier, 15, 5),
+                token::create_token(TokenKind::Operator(OperatorKind::Increment), 20, 2),
+                token::create_token(TokenKind::Semicolon, 22, 1),
             ]
         );
     }
@@ -541,14 +523,14 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 9),
-                create_token(TokenKind::Whitespace, 13, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 14, 1),
-                create_token(TokenKind::Whitespace, 15, 1),
-                create_token(TokenKind::String(StringKind::SingleQuoted), 16, 30),
-                create_token(TokenKind::Semicolon, 46, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 9),
+                token::create_token(TokenKind::Whitespace, 13, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 14, 1),
+                token::create_token(TokenKind::Whitespace, 15, 1),
+                token::create_token(TokenKind::String(StringKind::SingleQuoted), 16, 30),
+                token::create_token(TokenKind::Semicolon, 46, 1),
             ]
         );
     }
@@ -565,23 +547,23 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 4),
-                create_token(TokenKind::Whitespace, 8, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 9, 1),
-                create_token(TokenKind::Whitespace, 10, 1),
-                create_token(TokenKind::String(StringKind::DoubleQuoted), 11, 7),
-                create_token(TokenKind::Whitespace, 18, 1),
-                create_token(TokenKind::Operator(OperatorKind::Add), 19, 1),
-                create_token(TokenKind::Whitespace, 20, 1),
-                create_token(TokenKind::String(StringKind::DoubleQuoted), 21, 3),
-                create_token(TokenKind::Whitespace, 24, 1),
-                create_token(TokenKind::Operator(OperatorKind::Add), 25, 1),
-                create_token(TokenKind::Whitespace, 26, 1),
-                create_token(TokenKind::String(StringKind::DoubleQuoted), 27, 8),
-                create_token(TokenKind::Semicolon, 35, 1),
-                create_token(TokenKind::Whitespace, 36, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 4),
+                token::create_token(TokenKind::Whitespace, 8, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 9, 1),
+                token::create_token(TokenKind::Whitespace, 10, 1),
+                token::create_token(TokenKind::String(StringKind::DoubleQuoted), 11, 7),
+                token::create_token(TokenKind::Whitespace, 18, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Add), 19, 1),
+                token::create_token(TokenKind::Whitespace, 20, 1),
+                token::create_token(TokenKind::String(StringKind::DoubleQuoted), 21, 3),
+                token::create_token(TokenKind::Whitespace, 24, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Add), 25, 1),
+                token::create_token(TokenKind::Whitespace, 26, 1),
+                token::create_token(TokenKind::String(StringKind::DoubleQuoted), 27, 8),
+                token::create_token(TokenKind::Semicolon, 35, 1),
+                token::create_token(TokenKind::Whitespace, 36, 1),
             ]
         );
     }
@@ -599,22 +581,22 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Invalid, 4, 1),
-                create_token(TokenKind::Invalid, 5, 1),
-                create_token(TokenKind::Invalid, 6, 1),
-                create_token(TokenKind::Whitespace, 7, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 8, 1),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Invalid, 10, 1),
-                create_token(TokenKind::Invalid, 11, 1),
-                create_token(TokenKind::Invalid, 12, 1),
-                create_token(TokenKind::Whitespace, 13, 1),
-                create_token(TokenKind::Identifier, 14, 9),
-                create_token(TokenKind::Whitespace, 23, 1),
-                create_token(TokenKind::Identifier, 24, 9),
-                create_token(TokenKind::Semicolon, 33, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Invalid, 4, 1),
+                token::create_token(TokenKind::Invalid, 5, 1),
+                token::create_token(TokenKind::Invalid, 6, 1),
+                token::create_token(TokenKind::Whitespace, 7, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 8, 1),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Invalid, 10, 1),
+                token::create_token(TokenKind::Invalid, 11, 1),
+                token::create_token(TokenKind::Invalid, 12, 1),
+                token::create_token(TokenKind::Whitespace, 13, 1),
+                token::create_token(TokenKind::Identifier, 14, 9),
+                token::create_token(TokenKind::Whitespace, 23, 1),
+                token::create_token(TokenKind::Identifier, 24, 9),
+                token::create_token(TokenKind::Semicolon, 33, 1),
             ]
         )
     }
@@ -631,32 +613,32 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 5),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
-                create_token(TokenKind::Operator(OperatorKind::Add), 11, 1),
-                create_token(TokenKind::Whitespace, 12, 1),
-                create_token(TokenKind::Number, 13, 1),
-                create_token(TokenKind::Semicolon, 14, 1),
-                create_token(TokenKind::Whitespace, 15, 1),
-                create_token(TokenKind::Keyword, 16, 3),
-                create_token(TokenKind::Whitespace, 19, 1),
-                create_token(TokenKind::Invalid, 20, 1),
-                create_token(TokenKind::Invalid, 21, 1),
-                create_token(TokenKind::Invalid, 22, 1),
-                create_token(TokenKind::Whitespace, 23, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 24, 1),
-                create_token(TokenKind::Whitespace, 25, 1),
-                create_token(TokenKind::Invalid, 26, 1),
-                create_token(TokenKind::Invalid, 27, 1),
-                create_token(TokenKind::Invalid, 28, 1),
-                create_token(TokenKind::Whitespace, 29, 1),
-                create_token(TokenKind::Identifier, 30, 9),
-                create_token(TokenKind::Whitespace, 39, 1),
-                create_token(TokenKind::Identifier, 40, 9),
-                create_token(TokenKind::Semicolon, 49, 1),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 5),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Add), 11, 1),
+                token::create_token(TokenKind::Whitespace, 12, 1),
+                token::create_token(TokenKind::Number, 13, 1),
+                token::create_token(TokenKind::Semicolon, 14, 1),
+                token::create_token(TokenKind::Whitespace, 15, 1),
+                token::create_token(TokenKind::Keyword, 16, 3),
+                token::create_token(TokenKind::Whitespace, 19, 1),
+                token::create_token(TokenKind::Invalid, 20, 1),
+                token::create_token(TokenKind::Invalid, 21, 1),
+                token::create_token(TokenKind::Invalid, 22, 1),
+                token::create_token(TokenKind::Whitespace, 23, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 24, 1),
+                token::create_token(TokenKind::Whitespace, 25, 1),
+                token::create_token(TokenKind::Invalid, 26, 1),
+                token::create_token(TokenKind::Invalid, 27, 1),
+                token::create_token(TokenKind::Invalid, 28, 1),
+                token::create_token(TokenKind::Whitespace, 29, 1),
+                token::create_token(TokenKind::Identifier, 30, 9),
+                token::create_token(TokenKind::Whitespace, 39, 1),
+                token::create_token(TokenKind::Identifier, 40, 9),
+                token::create_token(TokenKind::Semicolon, 49, 1),
             ]
         );
 
@@ -761,13 +743,13 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                create_token(TokenKind::Keyword, 0, 3),
-                create_token(TokenKind::Whitespace, 3, 1),
-                create_token(TokenKind::Identifier, 4, 5),
-                create_token(TokenKind::Whitespace, 9, 1),
-                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
-                create_token(TokenKind::Whitespace, 11, 1),
-                create_token(TokenKind::Identifier, 12, 13),
+                token::create_token(TokenKind::Keyword, 0, 3),
+                token::create_token(TokenKind::Whitespace, 3, 1),
+                token::create_token(TokenKind::Identifier, 4, 5),
+                token::create_token(TokenKind::Whitespace, 9, 1),
+                token::create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                token::create_token(TokenKind::Whitespace, 11, 1),
+                token::create_token(TokenKind::Identifier, 12, 13),
             ]
         )
     }

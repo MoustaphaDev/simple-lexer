@@ -73,6 +73,13 @@ impl Span {
     }
 }
 
+pub fn create_token(kind: TokenKind, start: usize, length: usize) -> Token {
+    Token {
+        kind,
+        span: Span::new(start, length),
+    }
+}
+
 pub fn match_operator_slice_to_operator_kind(operator: &str) -> OperatorKind {
     match operator {
         // can be a simple operator
