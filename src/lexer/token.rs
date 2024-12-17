@@ -1,20 +1,38 @@
 #[derive(Debug, PartialEq)]
-pub enum Token {
-    // NOTE: consider refactoring to add concrete tokens
-    // instead of nesting information about the token in
-    // its enum value
-    String(StringType),
-    Operator(OperatorType),
-    Keyword(String),
-    Number(String),
-    Identifier(String),
-    Whitespace(char),
-    Semicolon,
-    Invalid(String),
+pub struct Span {
+    pub start: usize,
+    pub length: usize,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum OperatorType {
+pub struct Token {
+    pub kind: TokenKind,
+    pub span: Span,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TokenKind {
+    // NOTE: consider refactoring to add concrete tokens
+    // instead of nesting information about the token in
+    // its enum value
+    String(StringKind),
+    Operator(OperatorKind),
+    Keyword,
+    Number,
+    Identifier,
+    Whitespace,
+    Semicolon,
+    Invalid,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum StringKind {
+    SingleQuoted,
+    DoubleQuoted,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum OperatorKind {
     // +
     Add,
     Substract,
@@ -44,43 +62,46 @@ pub enum OperatorType {
     // >
     GreaterThan,
     LessThan,
+
+    // Invalid operator
+    Invalid,
 }
 
-#[derive(Debug, PartialEq)]
-pub enum StringType {
-    SingleQuoted(String),
-    DoubleQuoted(String),
+impl Span {
+    pub fn new(start: usize, length: usize) -> Self {
+        Self { start, length }
+    }
 }
 
-pub fn match_operator_to_token(operator: String) -> Token {
-    match operator.as_str() {
+pub fn match_operator_slice_to_operator_kind(operator: &str) -> OperatorKind {
+    match operator {
         // can be a simple operator
-        "+" => Token::Operator(OperatorType::Add),
-        "-" => Token::Operator(OperatorType::Substract),
-        "*" => Token::Operator(OperatorType::Multiply),
-        "/" => Token::Operator(OperatorType::Divide),
-        "=" => Token::Operator(OperatorType::Equal),
-        "%" => Token::Operator(OperatorType::Modulo),
+        "+" => OperatorKind::Add,
+        "-" => OperatorKind::Substract,
+        "*" => OperatorKind::Multiply,
+        "/" => OperatorKind::Divide,
+        "=" => OperatorKind::Equal,
+        "%" => OperatorKind::Modulo,
 
         // can be a comparison operator
-        "!=" => Token::Operator(OperatorType::NotEqual),
-        "!" => Token::Operator(OperatorType::Not),
-        ">" => Token::Operator(OperatorType::GreaterThan),
-        "<" => Token::Operator(OperatorType::LessThan),
+        "!=" => OperatorKind::NotEqual,
+        "!" => OperatorKind::Not,
+        ">" => OperatorKind::GreaterThan,
+        "<" => OperatorKind::LessThan,
 
         // can be a compound operator
-        "+=" => Token::Operator(OperatorType::CompoundAdd),
-        "-=" => Token::Operator(OperatorType::CompoundSubstract),
-        "*=" => Token::Operator(OperatorType::CompoundMultiply),
-        "/=" => Token::Operator(OperatorType::CompoundDivide),
-        "%=" => Token::Operator(OperatorType::CompoundModulo),
-        "==" => Token::Operator(OperatorType::DoubleEqual),
-        "++" => Token::Operator(OperatorType::Increment),
-        "--" => Token::Operator(OperatorType::Decrement),
+        "+=" => OperatorKind::CompoundAdd,
+        "-=" => OperatorKind::CompoundSubstract,
+        "*=" => OperatorKind::CompoundMultiply,
+        "/=" => OperatorKind::CompoundDivide,
+        "%=" => OperatorKind::CompoundModulo,
+        "==" => OperatorKind::DoubleEqual,
+        "++" => OperatorKind::Increment,
+        "--" => OperatorKind::Decrement,
 
         // if it's doesn't match any of the above it's a compound-like operator
         // We should split the operator in two, consume the first
         // part and the reprocess the second part
-        _ => Token::Invalid(operator),
+        _ => OperatorKind::Invalid,
     }
 }

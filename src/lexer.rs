@@ -11,12 +11,15 @@ mod character_helpers;
 mod token;
 
 use token::*;
+use unicode_segmentation::UnicodeSegmentation;
 
+#[derive(Debug)]
 enum StringState {
     InSingleQuote,
     InDoubleQuote,
 }
 
+#[derive(Debug)]
 enum State {
     Start,
     InNumber,
@@ -26,19 +29,39 @@ enum State {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Span {
-    start: usize,
-    length: usize,
+enum LexerErrorKind {
+    InvalidToken,
+    InvalidOperator,
 }
+
+type GraphemeIndice<'a> = (usize, &'a str);
 
 #[derive(Debug, PartialEq)]
 pub struct LexerError {
     span: Span,
-    message: String,
+    kind: LexerErrorKind,
 }
 
 pub struct ErrorHandler {
     errors: Vec<LexerError>,
+}
+
+pub struct Lexer<'a> {
+    current_state: State,
+    // buffered_token: String,
+    buffered_token_start: usize,
+    input: &'a String,
+    /**
+     * This is the index of the current grapheme being processed
+     * in the array of grapheme indices, not the index of the
+     * character in the input string
+     * If you want the index of the character in the input string
+     * use the grapheme indice's first tuple value
+     */
+    cursor: usize,
+    current_grapheme_indice: usize,
+    tokens: Vec<Token>,
+    handler: &'a mut ErrorHandler,
 }
 
 impl ErrorHandler {
@@ -51,20 +74,12 @@ impl ErrorHandler {
     }
 }
 
-pub struct Lexer<'a> {
-    current_state: State,
-    buffered_token: String,
-    input: String,
-    cursor: usize,
-    tokens: Vec<Token>,
-    handler: &'a mut ErrorHandler,
-}
-
 impl<'a> Lexer<'a> {
-    pub fn new(source: String, handler: &'a mut ErrorHandler) -> Self {
+    pub fn new(source: &'a String, handler: &'a mut ErrorHandler) -> Self {
         Self {
             current_state: State::Start,
-            buffered_token: String::new(),
+            buffered_token_start: 0,
+            current_grapheme_indice: 0,
             input: source,
             cursor: 0,
             tokens: Vec::new(),
@@ -73,11 +88,7 @@ impl<'a> Lexer<'a> {
     }
 }
 
-impl<'a> Lexer<'a> {
-    // something is an Identifier
-    // until we're proven wrong and that the
-    // identifier matches a keyword
-
+impl Lexer<'_> {
     fn change_state(&mut self, state: State) {
         self.current_state = state;
     }
@@ -89,97 +100,116 @@ impl<'a> Lexer<'a> {
 
 // state handlers
 impl<'a> Lexer<'a> {
-    fn handle_start(&mut self, char: &char) {
-        if character_helpers::is_digit(char) {
+    fn handle_start(&mut self, grapheme_indice: GraphemeIndice<'a>) {
+        let (_, grapheme) = grapheme_indice;
+        self.buffered_token_start = self.current_grapheme_indice;
+
+        if character_helpers::is_digit(grapheme) {
             self.change_state(State::InNumber);
-        } else if character_helpers::is_letter(char) {
+        } else if character_helpers::is_letter(grapheme) {
             self.change_state(State::InIdentifier);
-        } else if character_helpers::is_single_quote(char) {
+        } else if character_helpers::is_single_quote(grapheme) {
             // don't buffer the opening quote
             self.advance_cursor();
             self.change_state(State::InString(StringState::InSingleQuote));
-        } else if character_helpers::is_double_quote(char) {
+        } else if character_helpers::is_double_quote(grapheme) {
             // don't buffer the opening quote
             self.advance_cursor();
             self.change_state(State::InString(StringState::InDoubleQuote));
-        } else if character_helpers::is_operator(char) {
+        } else if character_helpers::is_operator(grapheme) {
             self.change_state(State::InOperator);
-        } else if character_helpers::is_semicolon(char) {
-            self.consume_token_explicit(Token::Semicolon);
+        } else if character_helpers::is_semicolon(grapheme) {
+            let token = Token {
+                kind: TokenKind::Semicolon,
+                span: Span::new(self.buffered_token_start, 1),
+            };
+            self.consume_token_explicit(token);
             // the token was created and consumed on the spot
-            // skip to the next character in the next iteration
+            // skip to the next graphem indice in the next iteration
             // of the state machine
             self.advance_cursor();
-        } else if character_helpers::is_whitespace(char) {
-            self.consume_token_explicit(Token::Whitespace(*char));
+        } else if character_helpers::is_whitespace(grapheme) {
+            let token = Token {
+                kind: TokenKind::Whitespace,
+                span: Span::new(self.buffered_token_start, 1),
+            };
+            self.consume_token_explicit(token);
             self.advance_cursor();
         } else {
             // TODO: should I introduce an InError state
             // so its the state handler will take responsibility
             // on how to handle the errors?
             // meh idk 😅, I'll just handle it here for now
-            self.consume_token_explicit(Token::Invalid(char.to_string()));
+            let token = Token {
+                kind: TokenKind::Invalid,
+                span: Span::new(self.buffered_token_start, 1),
+            };
+            self.consume_token_explicit(token);
             self.advance_cursor();
 
             self.handler.add_error(LexerError {
                 span: self.create_span(),
-                message: format!("Invalid token: `{char}`"),
+                kind: LexerErrorKind::InvalidToken,
             });
         }
     }
 
-    fn handle_in_number(&mut self, char: &char) {
-        if character_helpers::is_digit(char) {
-            self.buffer_token(*char);
+    fn handle_in_number(&mut self, grapheme_indice: GraphemeIndice<'a>) {
+        let (_, grapheme) = grapheme_indice;
+        if character_helpers::is_digit(grapheme) {
+            self.advance_cursor();
         } else {
             self.consume_buffered_token();
             self.reset_state();
         }
     }
 
-    fn handle_in_operator(&mut self, char: &char) {
+    fn handle_in_operator(&mut self, grapheme_indice: GraphemeIndice<'a>) {
+        let (_, grapheme) = grapheme_indice;
         // operators can be at most 2 characters long
-        // len < 2 because if this branch is reached
-        // the token's buffer is gonna grow by 1
-        if character_helpers::is_operator(char) && self.buffered_token.len() < 2 {
-            self.buffer_token(*char)
+        // len < 2 because the token's buffer is gonna grow by 1
+        // in this code path
+        if character_helpers::is_operator(grapheme) && self.get_buffered_token().len() < 2 {
+            self.advance_cursor();
         } else {
             self.consume_buffered_token();
             self.reset_state();
         }
     }
 
-    fn handle_in_string(&mut self, char: &char) {
-        let is_closing_quote;
-        if let State::InString(string_state) = &self.current_state {
-            is_closing_quote = match string_state {
+    fn handle_in_string(&mut self, grapheme_indice: GraphemeIndice<'a>) {
+        let (_, grapheme) = grapheme_indice;
+        let is_closing_quote = if let State::InString(string_state) = &self.current_state {
+            match string_state {
                 StringState::InSingleQuote => character_helpers::is_single_quote,
                 StringState::InDoubleQuote => character_helpers::is_double_quote,
-            };
+            }
         } else {
-            return;
-        }
+            // if this handler is called, the current state
+            // is without a doubt InString
+            // if not, it's a bug, and the program should panic
+            unreachable!();
+        };
 
-        // as long as we don't reach the end of the quote
-        if !is_closing_quote(char) {
-            self.buffer_token(*char);
+        if !is_closing_quote(grapheme) {
+            self.advance_cursor();
         } else {
             // don't reprocess the closing quote character
-            // The closing quote character doesn't need to be
-            // stored in the token
-            // We already have information about the nature
-            // of the string in the token itself
             self.advance_cursor();
+
             self.consume_buffered_token();
             self.reset_state();
         }
     }
 
-    fn handle_in_identifier(&mut self, char: &char) {
-        if character_helpers::is_in_identifier(char) {
-            self.buffer_token(*char);
+    fn handle_in_identifier(&mut self, grapheme_indice: GraphemeIndice<'a>) {
+        let (_, grapheme) = grapheme_indice;
+        if character_helpers::is_in_identifier(grapheme) {
+            self.advance_cursor();
         } else {
-            // consuming of keywords is hidden under this function
+            // Consuming of keywords is hidden under this function
+            // Something is an Identifier unless that
+            // identifier matches a keyword
             self.consume_buffered_token();
             self.reset_state();
         }
@@ -188,18 +218,23 @@ impl<'a> Lexer<'a> {
 
 // lexer utilities
 impl<'a> Lexer<'a> {
-    pub fn lex(&mut self) -> &Vec<self::Token> {
+    pub fn lex(&'a mut self) -> &'a Vec<self::Token> {
         // TODO: could have a better data structure?
-        let chars: Vec<char> = self.input.chars().collect();
-        while self.cursor < chars.len() {
-            let current_char = chars.get(self.cursor).unwrap();
+        let grapheme_indices = self
+            .input
+            .grapheme_indices(true)
+            .collect::<Vec<GraphemeIndice<'a>>>();
+
+        while self.cursor < grapheme_indices.len() {
+            let &current_grapheme_indice = grapheme_indices.get(self.cursor).unwrap();
+            self.current_grapheme_indice = current_grapheme_indice.0;
 
             match self.current_state {
-                State::Start => self.handle_start(current_char),
-                State::InIdentifier => self.handle_in_identifier(current_char),
-                State::InString(_) => self.handle_in_string(current_char),
-                State::InNumber => self.handle_in_number(current_char),
-                State::InOperator => self.handle_in_operator(current_char),
+                State::Start => self.handle_start(current_grapheme_indice),
+                State::InIdentifier => self.handle_in_identifier(current_grapheme_indice),
+                State::InString(_) => self.handle_in_string(current_grapheme_indice),
+                State::InNumber => self.handle_in_number(current_grapheme_indice),
+                State::InOperator => self.handle_in_operator(current_grapheme_indice),
             }
         }
 
@@ -207,7 +242,12 @@ impl<'a> Lexer<'a> {
         // if the state machine is still in a non-start state
         match self.current_state {
             State::Start => {}
-            _ => self.consume_buffered_token(),
+            _ => {
+                // advance the grapheme indice so that the last
+                // character is included in the buffered token
+                self.current_grapheme_indice = self.input.len();
+                self.consume_buffered_token()
+            }
         }
 
         &self.tokens
@@ -221,18 +261,26 @@ impl<'a> Lexer<'a> {
     fn create_span(&self) -> Span {
         // if the buffered token is empty
         // we're only processing a single character
-        let token_length = if self.buffered_token.is_empty() {
+        let token_length = if self.get_buffered_token().is_empty() {
             1
         } else {
-            self.buffered_token.len()
+            self.get_buffered_token().len()
         };
 
-        let end = self.cursor - 1;
+        Span::new(self.buffered_token_start, token_length)
+    }
 
-        Span {
-            start: end - token_length + 1,
-            length: token_length,
-        }
+    /**
+     * Gets a slice from the input string that represents the buffered token
+     * On a defined grapheme indice, the buffered token is the slice
+     * from the buffered_token_start to the preceding grapheme indice
+     * (slices are exclusive on the end index)
+     */
+    fn get_buffered_token(&self) -> &str {
+        // TODO: consider if you should introduce caching here
+        // Could be a bigger of a concern when you just want to get the length of the buffered token
+        // Will see, maybe I just don't understand enough how string slices work, and I'm overthinking it 🤷
+        &self.input[self.buffered_token_start..self.current_grapheme_indice]
     }
 
     fn advance_cursor(&mut self) {
@@ -240,94 +288,127 @@ impl<'a> Lexer<'a> {
     }
 
     fn consume_buffered_token(&mut self) {
-        let token = match &self.current_state {
+        let token_kind = match &self.current_state {
             State::InIdentifier => {
                 // if the identifier matches a keyword,
                 // consume the token as a keyword
-                if character_helpers::is_keyword(&self.buffered_token) {
-                    Token::Keyword(self.buffered_token.clone())
+                let buffered_token = self.get_buffered_token();
+                if character_helpers::is_keyword(buffered_token) {
+                    TokenKind::Keyword
                 } else {
-                    Token::Identifier(self.buffered_token.clone())
+                    TokenKind::Identifier
                 }
             }
-            State::InString(string_state) => match string_state {
-                StringState::InSingleQuote => {
-                    Token::String(StringType::SingleQuoted(self.buffered_token.clone()))
-                }
-                StringState::InDoubleQuote => {
-                    Token::String(StringType::DoubleQuoted(self.buffered_token.clone()))
+            State::InString(string_state) => {
+
+                // advance the grapheme indice so that the closing
+                // quote is included in the buffered token
+                self.current_grapheme_indice += 1;
+
+                match string_state {
+                    StringState::InSingleQuote => {
+                        TokenKind::String(StringKind::SingleQuoted)
+                    }
+                    StringState::InDoubleQuote => {
+                        TokenKind::String(StringKind::DoubleQuoted)
+                    }
                 }
             },
-            State::InNumber => Token::Number(self.buffered_token.clone()),
+            State::InNumber => TokenKind::Number,
             State::InOperator => {
-                let token = token::match_operator_to_token(self.buffered_token.clone());
+                let buffered_token = self.get_buffered_token();
+                let operator_kind = token::match_operator_slice_to_operator_kind(buffered_token);
                 // if it's doesn't match any valid operator, it's a compound-like operator
                 // We should split the operator in two, consume the first
                 // part and then reprocess the second part
-                if let Token::Invalid(operator) = token {
-                    self.handler.add_error(LexerError {
-                        span: self.create_span(),
-                        message: format!("Invalid operator: `{}`", operator),
-                    });
+                match operator_kind {
+                    OperatorKind::Invalid => {
+                        self.handler.add_error(LexerError {
+                            span: self.create_span(),
+                            kind: LexerErrorKind::InvalidOperator,
+                        });
+                        let buffered_token= self.get_buffered_token();
+                        let first_operator_slice = &buffered_token[0..1];
+                        let first_operator_kind = token::match_operator_slice_to_operator_kind(first_operator_slice);
 
-                    let mut operators_split = operator.chars();
-                    self.consume_token_explicit(match_operator_to_token(operators_split.next().unwrap().to_string()));
-                    match_operator_to_token(operators_split.next().unwrap().to_string())
+                        let first_token = Token {
+                            kind: TokenKind::Operator(first_operator_kind),
+                            span: Span::new(self.buffered_token_start, 1)
+                        };
+                        self.consume_token_explicit(first_token);
 
-                } else {
-                    token
+                        self.buffered_token_start += 1;
+
+                        let buffered_token= self.get_buffered_token();
+                        let second_operator_slice = &buffered_token[0..1];
+                        let second_operator_kind = token::match_operator_slice_to_operator_kind(second_operator_slice);
+                        TokenKind::Operator(second_operator_kind)
+                    },
+                    _ => TokenKind::Operator(operator_kind),
                 }
             },
-            // TODO: this should never be reached
-            // not sure if panicking is right thought
-            // I'l leave it as is for now
-            State::Start => unreachable!("This function should never be called to buffered tokens in the Start state. Use `consume_token_explicit`"),
+            // NOTE: this arm will never be matched
+            // it's a bug if it does
+            State::Start => unreachable!("This function should never be called to buffer tokens when the lexer is in a `Start` state. Use `consume_token_explicit`"),
         };
 
+        let token = Token {
+            kind: token_kind,
+            span: self.create_span(),
+        };
+
+        // the cursor is one character ahead of the last character
+        // of the token
+        // so the the start of the next token is the current cursor position
+        // self.buffered_token_start = self.current_grapheme_indice;
         self.tokens.push(token);
-        self.buffered_token.clear();
     }
 
     /**
-     * Helper function to consume a token created on the fly
+     * Helper method to consume a token created on the fly
      * The cursor would likely need to to incremented
      * as the character/string would've been used to
      * create the token
      */
     fn consume_token_explicit(&mut self, token: Token) {
+        // self.buffered_token_start = self.current_grapheme_indice;
         self.tokens.push(token);
-    }
-
-    fn buffer_token(&mut self, char: char) {
-        self.buffered_token.push(char);
-        self.advance_cursor();
     }
 }
 
+// TODO: consider snapshot testing instead of fixtures
 #[cfg(test)]
 mod tests {
     use super::*;
+    use similar_asserts::assert_eq;
+
+    fn create_token(kind: TokenKind, start: usize, length: usize) -> Token {
+        Token {
+            kind,
+            span: Span { start, length },
+        }
+    }
 
     #[test]
     fn it_tokenizes_basic_number_assignment_correctly() {
         let source = String::from("let value = 1;");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
-        assert_eq!(tokens.len(), 8);
+        // assert_eq!(tokens.len(), 8);
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("value".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Whitespace(' '),
-                Token::Number("1".to_string()),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 5),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                create_token(TokenKind::Whitespace, 11, 1),
+                create_token(TokenKind::Number, 12, 1),
+                create_token(TokenKind::Semicolon, 13, 1),
             ]
         );
     }
@@ -336,7 +417,7 @@ mod tests {
     fn it_tokenizes_number_compound_assignment_correctly() {
         let source = String::from("let value += 1;");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -344,14 +425,14 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("value".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::CompoundAdd),
-                Token::Whitespace(' '),
-                Token::Number("1".to_string()),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 5),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Operator(OperatorKind::CompoundAdd), 10, 2),
+                create_token(TokenKind::Whitespace, 12, 1),
+                create_token(TokenKind::Number, 13, 1),
+                create_token(TokenKind::Semicolon, 14, 1),
             ]
         );
     }
@@ -360,7 +441,7 @@ mod tests {
     fn it_tokenizes_invalid_operator_correctly_1() {
         let source = String::from("let value =+ 1;");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -368,15 +449,15 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("value".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Operator(OperatorType::Add),
-                Token::Whitespace(' '),
-                Token::Number("1".to_string()),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 5),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                create_token(TokenKind::Operator(OperatorKind::Add), 11, 1),
+                create_token(TokenKind::Whitespace, 12, 1),
+                create_token(TokenKind::Number, 13, 1),
+                create_token(TokenKind::Semicolon, 14, 1),
             ]
         );
     }
@@ -385,7 +466,7 @@ mod tests {
     fn it_tokenizes_invalid_operator_correctly_2() {
         let source = String::from("let value %=+ 1;");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -393,15 +474,15 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("value".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::CompoundModulo),
-                Token::Operator(OperatorType::Add),
-                Token::Whitespace(' '),
-                Token::Number("1".to_string()),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 5),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Operator(OperatorKind::CompoundModulo), 10, 2),
+                create_token(TokenKind::Operator(OperatorKind::Add), 12, 1),
+                create_token(TokenKind::Whitespace, 13, 1),
+                create_token(TokenKind::Number, 14, 1),
+                create_token(TokenKind::Semicolon, 15, 1),
             ]
         );
     }
@@ -410,7 +491,7 @@ mod tests {
     fn it_tokenizes_invalid_operator_correctly_3() {
         let source = String::from("let value ++++ 1;");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -418,15 +499,15 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("value".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Increment),
-                Token::Operator(OperatorType::Increment),
-                Token::Whitespace(' '),
-                Token::Number("1".to_string()),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 5),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Operator(OperatorKind::Increment), 10, 2),
+                create_token(TokenKind::Operator(OperatorKind::Increment), 12, 2),
+                create_token(TokenKind::Whitespace, 14, 1),
+                create_token(TokenKind::Number, 15, 1),
+                create_token(TokenKind::Semicolon, 16, 1),
             ]
         );
     }
@@ -435,7 +516,7 @@ mod tests {
     fn it_tokenizes_number_post_increment_correctly() {
         let source = String::from("let value = 1;\nvalue++;");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -443,18 +524,18 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("value".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Whitespace(' '),
-                Token::Number("1".to_string()),
-                Token::Semicolon,
-                Token::Whitespace('\n'),
-                Token::Identifier("value".to_string()),
-                Token::Operator(OperatorType::Increment),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 5),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                create_token(TokenKind::Whitespace, 11, 1),
+                create_token(TokenKind::Number, 12, 1),
+                create_token(TokenKind::Semicolon, 13, 1),
+                create_token(TokenKind::Whitespace, 14, 1),
+                create_token(TokenKind::Identifier, 15, 5),
+                create_token(TokenKind::Operator(OperatorKind::Increment), 20, 2),
+                create_token(TokenKind::Semicolon, 22, 1),
             ]
         );
     }
@@ -463,7 +544,7 @@ mod tests {
     fn it_tokenizes_cyrillic_strings_correctly() {
         let source = String::from("let greetings = 'привет мой друг';");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -471,14 +552,14 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("greetings".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Whitespace(' '),
-                Token::String(StringType::SingleQuoted("привет мой друг".to_string())),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 9),
+                create_token(TokenKind::Whitespace, 13, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 14, 1),
+                create_token(TokenKind::Whitespace, 15, 1),
+                create_token(TokenKind::String(StringKind::SingleQuoted), 16, 30),
+                create_token(TokenKind::Semicolon, 46, 1),
             ]
         );
     }
@@ -487,7 +568,7 @@ mod tests {
     fn it_tokenizes_source_with_string_concat_correctly() {
         let source = String::from("let word = \"Hello\" + \" \" + \"world!\"; ");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -495,23 +576,23 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("word".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Whitespace(' '),
-                Token::String(StringType::DoubleQuoted("Hello".to_string())),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Add),
-                Token::Whitespace(' '),
-                Token::String(StringType::DoubleQuoted(" ".to_string())),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Add),
-                Token::Whitespace(' '),
-                Token::String(StringType::DoubleQuoted("world!".to_string())),
-                Token::Semicolon,
-                Token::Whitespace(' ')
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 4),
+                create_token(TokenKind::Whitespace, 8, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 9, 1),
+                create_token(TokenKind::Whitespace, 10, 1),
+                create_token(TokenKind::String(StringKind::DoubleQuoted), 11, 7),
+                create_token(TokenKind::Whitespace, 18, 1),
+                create_token(TokenKind::Operator(OperatorKind::Add), 19, 1),
+                create_token(TokenKind::Whitespace, 20, 1),
+                create_token(TokenKind::String(StringKind::DoubleQuoted), 21, 3),
+                create_token(TokenKind::Whitespace, 24, 1),
+                create_token(TokenKind::Operator(OperatorKind::Add), 25, 1),
+                create_token(TokenKind::Whitespace, 26, 1),
+                create_token(TokenKind::String(StringKind::DoubleQuoted), 27, 8),
+                create_token(TokenKind::Semicolon, 35, 1),
+                create_token(TokenKind::Whitespace, 36, 1),
             ]
         );
     }
@@ -520,7 +601,7 @@ mod tests {
     fn it_correctly_tokenizes_source_with_invalid_tokens() {
         let source = String::from("let @$` = &&| something something;");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -529,22 +610,22 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Invalid('@'.to_string()),
-                Token::Invalid('$'.to_string()),
-                Token::Invalid('`'.to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Whitespace(' '),
-                Token::Invalid('&'.to_string()),
-                Token::Invalid('&'.to_string()),
-                Token::Invalid('|'.to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("something".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("something".to_string()),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Invalid, 4, 1),
+                create_token(TokenKind::Invalid, 5, 1),
+                create_token(TokenKind::Invalid, 6, 1),
+                create_token(TokenKind::Whitespace, 7, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 8, 1),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Invalid, 10, 1),
+                create_token(TokenKind::Invalid, 11, 1),
+                create_token(TokenKind::Invalid, 12, 1),
+                create_token(TokenKind::Whitespace, 13, 1),
+                create_token(TokenKind::Identifier, 14, 9),
+                create_token(TokenKind::Whitespace, 23, 1),
+                create_token(TokenKind::Identifier, 24, 9),
+                create_token(TokenKind::Semicolon, 33, 1),
             ]
         )
     }
@@ -553,7 +634,7 @@ mod tests {
     fn it_collects_expected_errors() {
         let source = String::from("let value =+ 1;\nlet @$` = &&| something something;");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
         assert_eq!(tokens.len(), 26);
@@ -561,111 +642,111 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("value".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Operator(OperatorType::Add),
-                Token::Whitespace(' '),
-                Token::Number("1".to_string()),
-                Token::Semicolon,
-                Token::Whitespace('\n'),
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Invalid('@'.to_string()),
-                Token::Invalid('$'.to_string()),
-                Token::Invalid('`'.to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Whitespace(' '),
-                Token::Invalid('&'.to_string()),
-                Token::Invalid('&'.to_string()),
-                Token::Invalid('|'.to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("something".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("something".to_string()),
-                Token::Semicolon,
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 5),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                create_token(TokenKind::Operator(OperatorKind::Add), 11, 1),
+                create_token(TokenKind::Whitespace, 12, 1),
+                create_token(TokenKind::Number, 13, 1),
+                create_token(TokenKind::Semicolon, 14, 1),
+                create_token(TokenKind::Whitespace, 15, 1),
+                create_token(TokenKind::Keyword, 16, 3),
+                create_token(TokenKind::Whitespace, 19, 1),
+                create_token(TokenKind::Invalid, 20, 1),
+                create_token(TokenKind::Invalid, 21, 1),
+                create_token(TokenKind::Invalid, 22, 1),
+                create_token(TokenKind::Whitespace, 23, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 24, 1),
+                create_token(TokenKind::Whitespace, 25, 1),
+                create_token(TokenKind::Invalid, 26, 1),
+                create_token(TokenKind::Invalid, 27, 1),
+                create_token(TokenKind::Invalid, 28, 1),
+                create_token(TokenKind::Whitespace, 29, 1),
+                create_token(TokenKind::Identifier, 30, 9),
+                create_token(TokenKind::Whitespace, 39, 1),
+                create_token(TokenKind::Identifier, 40, 9),
+                create_token(TokenKind::Semicolon, 49, 1),
             ]
         );
 
-        assert_eq!(lexer.handler.errors.len(), 7);
+        assert_eq!(handler.errors.len(), 7);
         assert_eq!(
             LexerError {
-                message: "Invalid operator: `=+`".to_string(),
                 span: Span {
                     start: 10,
                     length: 2,
-                }
+                },
+                kind: LexerErrorKind::InvalidOperator,
             },
-            lexer.handler.errors[0]
+            handler.errors[0]
         );
 
         assert_eq!(
             LexerError {
-                message: "Invalid token: `@`".to_string(),
                 span: Span {
                     start: 20,
                     length: 1,
-                }
+                },
+                kind: LexerErrorKind::InvalidToken,
             },
-            lexer.handler.errors[1]
+            handler.errors[1]
         );
 
         assert_eq!(
             LexerError {
-                message: "Invalid token: `$`".to_string(),
                 span: Span {
                     start: 21,
                     length: 1,
-                }
+                },
+                kind: LexerErrorKind::InvalidToken,
             },
-            lexer.handler.errors[2]
+            handler.errors[2]
         );
 
         assert_eq!(
             LexerError {
-                message: "Invalid token: ```".to_string(),
                 span: Span {
                     start: 22,
                     length: 1,
-                }
+                },
+                kind: LexerErrorKind::InvalidToken,
             },
-            lexer.handler.errors[3]
+            handler.errors[3]
         );
 
         assert_eq!(
             LexerError {
-                message: "Invalid token: `&`".to_string(),
                 span: Span {
                     start: 26,
                     length: 1,
-                }
+                },
+                kind: LexerErrorKind::InvalidToken,
             },
-            lexer.handler.errors[4]
+            handler.errors[4]
         );
 
         assert_eq!(
             LexerError {
-                message: "Invalid token: `&`".to_string(),
                 span: Span {
                     start: 27,
                     length: 1,
-                }
+                },
+                kind: LexerErrorKind::InvalidToken,
             },
-            lexer.handler.errors[5]
+            handler.errors[5]
         );
 
         assert_eq!(
             LexerError {
-                message: "Invalid token: `|`".to_string(),
                 span: Span {
                     start: 28,
                     length: 1,
-                }
+                },
+                kind: LexerErrorKind::InvalidToken,
             },
-            lexer.handler.errors[6]
+            handler.errors[6]
         );
     }
 
@@ -682,7 +763,7 @@ mod tests {
         // handlers' code much simpler
         let source = String::from("let value = another_value");
         let mut handler = ErrorHandler::new();
-        let mut lexer = Lexer::new(source, &mut handler);
+        let mut lexer = Lexer::new(&source, &mut handler);
 
         let tokens = lexer.lex();
 
@@ -691,14 +772,24 @@ mod tests {
         assert_eq!(
             tokens,
             &vec![
-                Token::Keyword("let".to_string()),
-                Token::Whitespace(' '),
-                Token::Identifier("value".to_string()),
-                Token::Whitespace(' '),
-                Token::Operator(OperatorType::Equal),
-                Token::Whitespace(' '),
-                Token::Identifier("another_value".to_string()),
+                create_token(TokenKind::Keyword, 0, 3),
+                create_token(TokenKind::Whitespace, 3, 1),
+                create_token(TokenKind::Identifier, 4, 5),
+                create_token(TokenKind::Whitespace, 9, 1),
+                create_token(TokenKind::Operator(OperatorKind::Equal), 10, 1),
+                create_token(TokenKind::Whitespace, 11, 1),
+                create_token(TokenKind::Identifier, 12, 13),
             ]
         )
+    }
+
+    #[bench]
+    fn test_bench(b: &mut test::Bencher) {
+        b.iter(|| {
+            let source = String::from("let value = 1;let value = 1;let value = 1;let value = 1;");
+            let mut handler = ErrorHandler::new();
+            let mut lexer = Lexer::new(&source, &mut handler);
+            let _tokens = lexer.lex();
+        });
     }
 }
