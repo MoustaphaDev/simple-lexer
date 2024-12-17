@@ -118,7 +118,6 @@ name = "simple-lexer"
 version = "0.1.0"
 dependencies = [
  "similar-asserts",
- "unicode-segmentation",
 ]
 
 [[package]]

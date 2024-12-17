@@ -11,7 +11,6 @@ mod character_helpers;
 mod token;
 
 use token::*;
-use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
 enum StringState {
@@ -34,8 +33,6 @@ enum LexerErrorKind {
     InvalidOperator,
 }
 
-type GraphemeIndice<'a> = (usize, &'a str);
-
 #[derive(Debug, PartialEq)]
 pub struct LexerError {
     span: Span,
@@ -48,18 +45,17 @@ pub struct ErrorHandler {
 
 pub struct Lexer<'a> {
     current_state: State,
-    // buffered_token: String,
     buffered_token_start: usize,
     input: &'a String,
     /**
-     * This is the index of the current grapheme being processed
-     * in the array of grapheme indices, not the index of the
+     * This is the index of the current character being processed
+     * in the vector of characters, not the byte index of the
      * character in the input string
-     * If you want the index of the character in the input string
-     * use the grapheme indice's first tuple value
+     * If you want the byte index of the character in the input string
+     * use the current_code_point_byte_index value
      */
     cursor: usize,
-    current_grapheme_indice: usize,
+    current_code_point_index: usize,
     tokens: Vec<Token>,
     handler: &'a mut ErrorHandler,
 }
@@ -79,7 +75,7 @@ impl<'a> Lexer<'a> {
         Self {
             current_state: State::Start,
             buffered_token_start: 0,
-            current_grapheme_indice: 0,
+            current_code_point_index: 0,
             input: source,
             cursor: 0,
             tokens: Vec::new(),
@@ -100,25 +96,24 @@ impl Lexer<'_> {
 
 // state handlers
 impl<'a> Lexer<'a> {
-    fn handle_start(&mut self, grapheme_indice: GraphemeIndice<'a>) {
-        let (_, grapheme) = grapheme_indice;
-        self.buffered_token_start = self.current_grapheme_indice;
+    fn handle_start(&mut self, character: &char) {
+        self.buffered_token_start = self.current_code_point_index;
 
-        if character_helpers::is_digit(grapheme) {
+        if character_helpers::is_digit(character) {
             self.change_state(State::InNumber);
-        } else if character_helpers::is_letter(grapheme) {
+        } else if character_helpers::is_letter(character) {
             self.change_state(State::InIdentifier);
-        } else if character_helpers::is_single_quote(grapheme) {
+        } else if character_helpers::is_single_quote(character) {
             // don't buffer the opening quote
             self.advance_cursor();
             self.change_state(State::InString(StringState::InSingleQuote));
-        } else if character_helpers::is_double_quote(grapheme) {
+        } else if character_helpers::is_double_quote(character) {
             // don't buffer the opening quote
             self.advance_cursor();
             self.change_state(State::InString(StringState::InDoubleQuote));
-        } else if character_helpers::is_operator(grapheme) {
+        } else if character_helpers::is_operator(character) {
             self.change_state(State::InOperator);
-        } else if character_helpers::is_semicolon(grapheme) {
+        } else if character_helpers::is_semicolon(character) {
             let token = Token {
                 kind: TokenKind::Semicolon,
                 span: Span::new(self.buffered_token_start, 1),
@@ -128,7 +123,7 @@ impl<'a> Lexer<'a> {
             // skip to the next graphem indice in the next iteration
             // of the state machine
             self.advance_cursor();
-        } else if character_helpers::is_whitespace(grapheme) {
+        } else if character_helpers::is_whitespace(character) {
             let token = Token {
                 kind: TokenKind::Whitespace,
                 span: Span::new(self.buffered_token_start, 1),
@@ -154,9 +149,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn handle_in_number(&mut self, grapheme_indice: GraphemeIndice<'a>) {
-        let (_, grapheme) = grapheme_indice;
-        if character_helpers::is_digit(grapheme) {
+    fn handle_in_number(&mut self, character: &char) {
+        if character_helpers::is_digit(character) {
             self.advance_cursor();
         } else {
             self.consume_buffered_token();
@@ -164,12 +158,11 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn handle_in_operator(&mut self, grapheme_indice: GraphemeIndice<'a>) {
-        let (_, grapheme) = grapheme_indice;
+    fn handle_in_operator(&mut self, character: &char) {
         // operators can be at most 2 characters long
         // len < 2 because the token's buffer is gonna grow by 1
         // in this code path
-        if character_helpers::is_operator(grapheme) && self.get_buffered_token().len() < 2 {
+        if character_helpers::is_operator(character) && self.get_buffered_token().len() < 2 {
             self.advance_cursor();
         } else {
             self.consume_buffered_token();
@@ -177,8 +170,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn handle_in_string(&mut self, grapheme_indice: GraphemeIndice<'a>) {
-        let (_, grapheme) = grapheme_indice;
+    fn handle_in_string(&mut self, character: &char) {
         let is_closing_quote = if let State::InString(string_state) = &self.current_state {
             match string_state {
                 StringState::InSingleQuote => character_helpers::is_single_quote,
@@ -191,7 +183,7 @@ impl<'a> Lexer<'a> {
             unreachable!();
         };
 
-        if !is_closing_quote(grapheme) {
+        if !is_closing_quote(character) {
             self.advance_cursor();
         } else {
             // don't reprocess the closing quote character
@@ -202,9 +194,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn handle_in_identifier(&mut self, grapheme_indice: GraphemeIndice<'a>) {
-        let (_, grapheme) = grapheme_indice;
-        if character_helpers::is_in_identifier(grapheme) {
+    fn handle_in_identifier(&mut self, character: &char) {
+        if character_helpers::is_in_identifier(character) {
             self.advance_cursor();
         } else {
             // Consuming of keywords is hidden under this function
@@ -220,21 +211,21 @@ impl<'a> Lexer<'a> {
 impl<'a> Lexer<'a> {
     pub fn lex(&'a mut self) -> &'a Vec<self::Token> {
         // TODO: could have a better data structure?
-        let grapheme_indices = self
-            .input
-            .grapheme_indices(true)
-            .collect::<Vec<GraphemeIndice<'a>>>();
+        let characters = self.input.char_indices().collect::<Vec<(usize, char)>>();
 
-        while self.cursor < grapheme_indices.len() {
-            let &current_grapheme_indice = grapheme_indices.get(self.cursor).unwrap();
-            self.current_grapheme_indice = current_grapheme_indice.0;
+        while self.cursor < characters.len() {
+            let (current_code_point_byte_index, current_character) = characters
+                .get(self.cursor)
+                .expect("Something something bad!");
+
+            self.current_code_point_index = *current_code_point_byte_index;
 
             match self.current_state {
-                State::Start => self.handle_start(current_grapheme_indice),
-                State::InIdentifier => self.handle_in_identifier(current_grapheme_indice),
-                State::InString(_) => self.handle_in_string(current_grapheme_indice),
-                State::InNumber => self.handle_in_number(current_grapheme_indice),
-                State::InOperator => self.handle_in_operator(current_grapheme_indice),
+                State::Start => self.handle_start(current_character),
+                State::InIdentifier => self.handle_in_identifier(current_character),
+                State::InString(_) => self.handle_in_string(current_character),
+                State::InNumber => self.handle_in_number(current_character),
+                State::InOperator => self.handle_in_operator(current_character),
             }
         }
 
@@ -243,9 +234,9 @@ impl<'a> Lexer<'a> {
         match self.current_state {
             State::Start => {}
             _ => {
-                // advance the grapheme indice so that the last
+                // advance the character index so that the last
                 // character is included in the buffered token
-                self.current_grapheme_indice = self.input.len();
+                self.current_code_point_index = self.input.len();
                 self.consume_buffered_token()
             }
         }
@@ -272,15 +263,15 @@ impl<'a> Lexer<'a> {
 
     /**
      * Gets a slice from the input string that represents the buffered token
-     * On a defined grapheme indice, the buffered token is the slice
-     * from the buffered_token_start to the preceding grapheme indice
+     * On a defined character index, the buffered token is the slice
+     * from the buffered_token_start to the preceding character indice
      * (slices are exclusive on the end index)
      */
     fn get_buffered_token(&self) -> &str {
         // TODO: consider if you should introduce caching here
         // Could be a bigger of a concern when you just want to get the length of the buffered token
         // Will see, maybe I just don't understand enough how string slices work, and I'm overthinking it 🤷
-        &self.input[self.buffered_token_start..self.current_grapheme_indice]
+        &self.input[self.buffered_token_start..self.current_code_point_index]
     }
 
     fn advance_cursor(&mut self) {
@@ -301,9 +292,9 @@ impl<'a> Lexer<'a> {
             }
             State::InString(string_state) => {
 
-                // advance the grapheme indice so that the closing
+                // advance the character byte index so that the closing
                 // quote is included in the buffered token
-                self.current_grapheme_indice += 1;
+                self.current_code_point_index += 1;
 
                 match string_state {
                     StringState::InSingleQuote => {
@@ -360,7 +351,6 @@ impl<'a> Lexer<'a> {
         // the cursor is one character ahead of the last character
         // of the token
         // so the the start of the next token is the current cursor position
-        // self.buffered_token_start = self.current_grapheme_indice;
         self.tokens.push(token);
     }
 
@@ -371,7 +361,6 @@ impl<'a> Lexer<'a> {
      * create the token
      */
     fn consume_token_explicit(&mut self, token: Token) {
-        // self.buffered_token_start = self.current_grapheme_indice;
         self.tokens.push(token);
     }
 }
