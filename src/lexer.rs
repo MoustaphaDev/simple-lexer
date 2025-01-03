@@ -8,13 +8,13 @@ mod token;
 
 use token::*;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum StringState {
     InSingleQuote,
     InDoubleQuote,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum State {
     Start,
     InNumber,
@@ -92,7 +92,7 @@ impl Lexer<'_> {
 }
 
 // state handlers
-impl<'a> Lexer<'a> {
+impl Lexer<'_> {
     fn handle_start(&mut self, character: &char) {
         self.buffered_token_start = self.current_character_byte_index;
 
@@ -201,34 +201,38 @@ impl<'a> Lexer<'a> {
 impl<'a> Lexer<'a> {
     pub fn lex(&'a mut self) -> &'a Vec<self::Token> {
         // TODO: could have a better data structure?
-        let characters = self.input.char_indices().collect::<Vec<(usize, char)>>();
+        let mut characters = self.input.char_indices().peekable();
 
-        while self.cursor < characters.len() {
-            let (current_character_byte_index, current_character) = characters
-                .get(self.cursor)
-                .expect("Something something bad!");
+        let mut advancement = 0;
+        let mut current_group = characters.next();
 
-            self.current_character_byte_index = *current_character_byte_index;
+        while current_group.is_some() {
+            let (current_character_byte_index, current_character) =
+                current_group.expect("This should never be None");
+            self.current_character_byte_index = current_character_byte_index;
 
             match self.current_state {
-                State::Start => self.handle_start(current_character),
-                State::InIdentifier => self.handle_in_identifier(current_character),
-                State::InString(_) => self.handle_in_string(current_character),
-                State::InNumber => self.handle_in_number(current_character),
-                State::InOperator => self.handle_in_operator(current_character),
+                State::Start => self.handle_start(&current_character),
+                State::InIdentifier => self.handle_in_identifier(&current_character),
+                State::InString(_) => self.handle_in_string(&current_character),
+                State::InNumber => self.handle_in_number(&current_character),
+                State::InOperator => self.handle_in_operator(&current_character),
+            }
+
+            let delta = self.cursor - advancement;
+            for _ in 0..delta {
+                current_group = characters.next();
+                advancement += 1;
             }
         }
 
         // consume the last buffered token
         // if the state machine is still in a non-start state
-        match self.current_state {
-            State::Start => {}
-            _ => {
-                // advance the character index so that the last
-                // character is included in the buffered token
-                self.current_character_byte_index = self.input.len();
-                self.consume_buffered_token()
-            }
+        if self.current_state != State::Start {
+            // advance the character index so that the last
+            // character is included in the buffered token
+            self.current_character_byte_index = self.input.len();
+            self.consume_buffered_token()
         }
 
         &self.tokens
