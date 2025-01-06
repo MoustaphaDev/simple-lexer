@@ -1,1 +1,4 @@
 /target
+binaries
+.swp
+diff.log

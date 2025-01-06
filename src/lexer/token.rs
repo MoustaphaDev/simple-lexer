@@ -1,7 +1,7 @@
 #[derive(Debug, PartialEq)]
 pub struct Span {
-    pub start: usize,
     pub length: usize,
+    pub start: usize,
 }
 
 #[derive(Debug, PartialEq)]

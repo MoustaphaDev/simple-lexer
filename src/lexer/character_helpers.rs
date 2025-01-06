@@ -7,35 +7,35 @@ pub fn is_keyword(str: &str) -> bool {
     )
 }
 
-pub fn is_digit(char: &char) -> bool {
+pub fn is_digit(char: char) -> bool {
     char.is_ascii_digit()
 }
 
-pub fn is_letter(char: &char) -> bool {
+pub fn is_letter(char: char) -> bool {
     char.is_ascii_alphabetic()
 }
 
 // no bitwise or logical stuff for now
-pub fn is_operator(char: &char) -> bool {
+pub fn is_operator(char: char) -> bool {
     matches!(char, '+' | '-' | '*' | '/' | '=' | '!' | '<' | '>' | '%')
 }
 
-pub fn is_single_quote(char: &char) -> bool {
-    *char == '\''
+pub fn is_single_quote(char: char) -> bool {
+    char == '\''
 }
 
-pub fn is_double_quote(char: &char) -> bool {
-    *char == '\"'
+pub fn is_double_quote(char: char) -> bool {
+    char == '\"'
 }
 
-pub fn is_semicolon(char: &char) -> bool {
-    *char == ';'
+pub fn is_semicolon(char: char) -> bool {
+    char == ';'
 }
 
-pub fn is_whitespace(char: &char) -> bool {
+pub fn is_whitespace(char: char) -> bool {
     char.is_whitespace()
 }
 
-pub fn is_in_identifier(char: &char) -> bool {
-    char.is_ascii_alphanumeric() || *char == '_'
+pub fn is_in_identifier(char: char) -> bool {
+    char.is_ascii_alphanumeric() || char == '_'
 }

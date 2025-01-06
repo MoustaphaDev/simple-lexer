@@ -93,7 +93,7 @@ impl Lexer<'_> {
 
 // state handlers
 impl Lexer<'_> {
-    fn handle_start(&mut self, character: &char) {
+    fn handle_start(&mut self, character: char) {
         self.buffered_token_start = self.current_character_byte_index;
 
         if character_helpers::is_digit(character) {
@@ -139,7 +139,7 @@ impl Lexer<'_> {
         }
     }
 
-    fn handle_in_number(&mut self, character: &char) {
+    fn handle_in_number(&mut self, character: char) {
         if character_helpers::is_digit(character) {
             self.advance_cursor();
         } else {
@@ -148,7 +148,7 @@ impl Lexer<'_> {
         }
     }
 
-    fn handle_in_operator(&mut self, character: &char) {
+    fn handle_in_operator(&mut self, character: char) {
         // operators can be at most 2 characters long
         // len < 2 because the token's buffer is gonna grow by 1
         // in this code path
@@ -160,7 +160,7 @@ impl Lexer<'_> {
         }
     }
 
-    fn handle_in_string(&mut self, character: &char) {
+    fn handle_in_string(&mut self, character: char) {
         let is_closing_quote = if let State::InString(string_state) = &self.current_state {
             match string_state {
                 StringState::InSingleQuote => character_helpers::is_single_quote,
@@ -184,7 +184,7 @@ impl Lexer<'_> {
         }
     }
 
-    fn handle_in_identifier(&mut self, character: &char) {
+    fn handle_in_identifier(&mut self, character: char) {
         if character_helpers::is_in_identifier(character) {
             self.advance_cursor();
         } else {
@@ -212,11 +212,11 @@ impl<'a> Lexer<'a> {
             self.current_character_byte_index = current_character_byte_index;
 
             match self.current_state {
-                State::Start => self.handle_start(&current_character),
-                State::InIdentifier => self.handle_in_identifier(&current_character),
-                State::InString(_) => self.handle_in_string(&current_character),
-                State::InNumber => self.handle_in_number(&current_character),
-                State::InOperator => self.handle_in_operator(&current_character),
+                State::Start => self.handle_start(current_character),
+                State::InIdentifier => self.handle_in_identifier(current_character),
+                State::InString(_) => self.handle_in_string(current_character),
+                State::InNumber => self.handle_in_number(current_character),
+                State::InOperator => self.handle_in_operator(current_character),
             }
 
             let delta = self.cursor - advancement;
